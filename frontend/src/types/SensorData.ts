@@ -8,6 +8,7 @@ export interface SensorData {
   co: number;
   airQualityStatus: string;
   isLight: boolean;
+  motionDetected?: boolean;
   deviceId: string;
   timestamp: number;
   receivedAt: string;

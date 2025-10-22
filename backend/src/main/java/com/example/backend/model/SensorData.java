@@ -20,6 +20,7 @@ public class SensorData {
     private int co;
     private String airQualityStatus;
     private boolean isLight;
+    private boolean motionDetected;
     private String deviceId;
     private long timestamp;
     private LocalDateTime receivedAt;

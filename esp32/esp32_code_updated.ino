@@ -41,6 +41,8 @@ DHT dht(DHTPIN, DHTTYPE);
 // LDR setup
 #define LDR_PIN 33       // Digital output from LDR module
 #define LED_PIN 13       // GPIO pin to drive external 5V LED (through resistor/transistor)
+// PIR Motion sensor (PIR module typically outputs HIGH when motion detected)
+#define PIR_PIN 27
 
 void setup_wifi() {
   delay(10);
@@ -142,6 +144,8 @@ void setup() {
   // Pin modes
   pinMode(LDR_PIN, INPUT);
   pinMode(LED_PIN, OUTPUT);
+  // PIR motion sensor input
+  pinMode(PIR_PIN, INPUT);
 
   // Welcome screen
   lcd.setCursor(0, 0);
@@ -169,7 +173,7 @@ String airQualityStatus(int value) {
 
 void publishSensorData(float temperature, float humidity, int mq135_value, 
                       int co2_ppm, int nh3_ppm, int ch4_ppm, int co_ppm, 
-                      String status, int lightState) {
+                      String status, int lightState, bool motionDetected) {
   // Create JSON document
   StaticJsonDocument<256> doc;
   
@@ -183,6 +187,7 @@ void publishSensorData(float temperature, float humidity, int mq135_value,
   doc["co"] = co_ppm;
   doc["airQualityStatus"] = status;
   doc["isLight"] = (lightState == HIGH);
+  doc["motionDetected"] = motionDetected;
   doc["deviceId"] = mqtt_client_id;
   doc["timestamp"] = millis();
   
@@ -194,6 +199,7 @@ void publishSensorData(float temperature, float humidity, int mq135_value,
   if (mqtt.connected()) {
     mqtt.publish(mqtt_topic, jsonBuffer);
     Serial.println("Data published to MQTT");
+    Serial.println(jsonBuffer);
   } else {
     Serial.println("MQTT disconnected, data not sent");
   }
@@ -285,7 +291,18 @@ void loop() {
   unsigned long now = millis();
   if (now - lastMsgTime > msgInterval) {
     lastMsgTime = now;
-    publishSensorData(temperature, humidity, mq135_value, co2_ppm, nh3_ppm, ch4_ppm, co_ppm, status, lightState);
+    // Read motion sensor
+    int motionState = digitalRead(PIR_PIN);
+    bool motionDetected = (motionState == HIGH);
+
+    // Update LCD last line briefly with motion status
+    lcd.setCursor(0, 3);
+    lcd.print("Air: ");
+    lcd.print(status);
+    lcd.print(" ");
+    lcd.print(motionDetected ? "M:Yes" : "M:No ");
+
+    publishSensorData(temperature, humidity, mq135_value, co2_ppm, nh3_ppm, ch4_ppm, co_ppm, status, lightState, motionDetected);
   }
 
   delay(2000);

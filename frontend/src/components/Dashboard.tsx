@@ -185,6 +185,18 @@ const Dashboard: React.FC = () => {
                 </CardContent>
               </Card>
             </Grid>
+
+            {/* Motion Card */}
+            <Grid item xs={12} md={3}>
+              <Card elevation={3}>
+                <CardHeader title="Motion" />
+                <CardContent>
+                  <Typography variant="h5" align="center" color={sensorData.motionDetected ? 'error' : 'textPrimary'}>
+                    {sensorData.motionDetected ? 'Detected' : 'No Motion'}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
           </Grid>
           
           {/* Gas Levels */}
