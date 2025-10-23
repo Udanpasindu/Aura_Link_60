@@ -4,15 +4,22 @@ AuraLink is a full-stack IoT air quality monitoring system that provides real-ti
 
 1. **ESP32 Hardware** - Collects air quality data using DHT22 and MQ-135 sensors
 2. **Spring Boot Backend** - Receives sensor data via MQTT and provides APIs and WebSocket connections
-3. **React Frontend** - Displays real-time air quality data in a dashboard interface
+3. **React Frontend** - Displays real-time air quality data in a dashboard interface with email management
 
 ## System Architecture
 
 ```
   ┌──────────┐        MQTT        ┌───────────┐       REST/WebSocket      ┌─────────┐
   │  ESP32   │──────────────────▶ │  Backend  │───────────────────────▶ │ Frontend │
-  │ Hardware │  (HiveMQ Broker)  │(Spring Boot)│                         │ (React) │
-  └──────────┘                   └───────────┘                         └─────────┘
+  │ Hardware │  (HiveMQ Broker)  │(Spring Boot)│      Email API          │ (React)  │
+  └──────────┘                   └────┬──────┘                         └─────────┘
+                                      │
+                                    SMTP/IMAP
+                                      │
+                                 ┌────▼─────┐
+                                 │   Mail   │
+                                 │  Server  │
+                                 └──────────┘
 ```
 
 ## Setup Instructions
@@ -70,6 +77,14 @@ AuraLink is a full-stack IoT air quality monitoring system that provides real-ti
 
 The backend server will start on port 8080.
 
+#### Email Configuration:
+The backend includes email functionality for sending alerts and receiving emails. Configuration is in `application.properties`:
+- **SMTP** (for sending): Port 587 with STARTTLS
+- **IMAP** (for receiving): Port 143
+- **Auto-fetch**: Emails are automatically fetched every 5 minutes
+
+See [EMAIL_FEATURE.md](EMAIL_FEATURE.md) for complete email feature documentation.
+
 ### 3. React Frontend Setup
 
 #### Prerequisites:
@@ -92,6 +107,15 @@ The backend server will start on port 8080.
 
 The frontend will be available at `http://localhost:5173`.
 
+#### Features:
+- **Sensor Dashboard**: Real-time sensor data visualization
+- **Email Management**: Complete email interface with:
+  - Compose emails (standard and sensor alerts)
+  - View sent and received emails
+  - Search functionality
+  - Real-time statistics
+  - Auto-refresh
+
 ## Global MQTT Setup
 
 This project uses HiveMQ's public MQTT broker (`broker.hivemq.com`) for demonstration purposes. For a production environment, consider:
@@ -112,6 +136,10 @@ This project uses HiveMQ's public MQTT broker (`broker.hivemq.com`) for demonstr
 - Historical data visualization
 - WebSocket for instant updates
 - Mobile-responsive UI
+- **Email notifications for sensor alerts** ✨ NEW
+- **Automatic email monitoring (IMAP)** ✨ NEW
+- **Scheduled email fetching** ✨ NEW
+- **Email management API** ✨ NEW
 
 ## Troubleshooting
 
@@ -134,6 +162,30 @@ This project uses HiveMQ's public MQTT broker (`broker.hivemq.com`) for demonstr
 
 - User authentication
 - Device management
-- Alert notifications
+- ~~Alert notifications~~ ✅ Email alerts implemented
 - Data storage in a database
 - Mobile app support
+- Email attachment support
+- Advanced email templates
+
+## Email Feature
+
+### Quick Start
+Send a test email:
+```bash
+curl -X POST "http://localhost:8080/api/email/send-simple?to=recipient@example.com&subject=Test&body=Hello from AuraLink"
+```
+
+### Documentation
+- **[EMAIL_FEATURE.md](EMAIL_FEATURE.md)** - Complete email API documentation
+- **[EMAIL_QUICK_START.md](EMAIL_QUICK_START.md)** - Quick start guide with examples
+- **[EMAIL_IMPLEMENTATION_SUMMARY.md](EMAIL_IMPLEMENTATION_SUMMARY.md)** - Implementation details
+
+### Email Endpoints
+- `POST /api/email/send` - Send email
+- `POST /api/email/send-alert` - Send sensor alert
+- `GET /api/email/received` - Get received emails
+- `POST /api/email/fetch` - Fetch new emails
+- `GET /api/email/stats` - Get email statistics
+
+See complete API documentation in [EMAIL_FEATURE.md](EMAIL_FEATURE.md).
