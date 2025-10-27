@@ -28,4 +28,6 @@ public class EmailMessage {
     private String errorMessage;
     private String summary; // AI-generated summary (max 80 chars)
     private String priority; // HIGH, MEDIUM, LOW
+    @Builder.Default
+    private boolean isRead = false; // Track if email has been read
 }

@@ -5,45 +5,127 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 
+// ================== WiFi & MQTT Configuration ==================
 // WiFi credentials
-const char* ssid = "kavish 99";
-const char* password = "kavishka123";
+const char* ssid = "Dulshan Dialog 4G 643";
+const char* password = "4Ce147c3";
 
-// MQTT Broker details (HiveMQ Cloud)
-const char* mqtt_server = "broker.hivemq.com";  // Public broker (replace with your cloud broker)
+// MQTT Broker details
+const char* mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
-// const char* mqtt_username = "your_username"; // Uncomment if your broker needs auth
-// const char* mqtt_password = "your_password";
 const char* mqtt_client_id = "ESP32_AuraLink_Client";
+
+// MQTT Topics
 const char* mqtt_topic = "auralink/sensors";
 const char* mqtt_status_topic = "auralink/status";
+const char* TOPIC_EMAIL_NOTIFICATIONS = "iot/email/notifications";
+const char* TOPIC_EMAIL_NEW = "iot/email/new";
+const char* TOPIC_EMAIL_PRIORITY = "iot/email/priority";
+const char* TOPIC_EMAIL_ALL_READ = "iot/email/allread";
+const char* TOPIC_EMAIL_PRIORITY_READ = "iot/email/priorityread";
 
+// ================== Hardware Components ==================
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
-unsigned long lastMsgTime = 0;
-const long msgInterval = 5000; // Send data every 5 seconds
-
-// LCD setup
 LiquidCrystal_I2C lcd(0x27, 20, 4);
+DHT dht(32, DHT22);
 
-// Define I2C pins for ESP32
+// ================== Timing Configuration ==================
+unsigned long lastMsgTime = 0;
+unsigned long lastSuggestionTime = 0;
+unsigned long suggestionStartTime = 0;
+unsigned long emailDisplayStartTime = 0;
+const long msgInterval = 5000;              // Sensor data publish interval
+const long suggestionInterval = 30000;      // Show suggestion every 30 seconds
+const long suggestionDuration = 5000;       // Show suggestion for 5 seconds
+const long emailDisplayDuration = 10000;    // Show email summary for 10 seconds
+
+// ================== Pin Configuration ==================
+// I2C pins
 #define I2C_SDA 21
 #define I2C_SCL 22
 
-// DHT22 setup
-#define DHTPIN 32        
+// Sensor pins
+#define DHTPIN 32
 #define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+#define MQ135_PIN 34
+#define LDR_PIN 33
+#define PIR_PIN 25
 
-// MQ-135 setup
-#define MQ135_PIN 34     // Analog pin for MQ-135
+// Control pins
+#define LED_PIN 13              // Ambient light LED
+#define BUZZER_PIN 27           // Buzzer
 
-// LDR setup
-#define LDR_PIN 33       // Digital output from LDR module
-#define LED_PIN 13       // GPIO pin to drive external 5V LED (through resistor/transistor)
-// PIR Motion sensor (PIR module typically outputs HIGH when motion detected)
-#define PIR_PIN 27
+// Email notification LEDs
+#define EMAIL_BLUE_LED_PIN 19   // Blue LED for unread emails
+#define EMAIL_RED_LED_PIN 18    // Red LED for priority emails
+#define ENV_GREEN_LED_PIN 17    // Green LED for good air quality
 
+// ================== Data Structures ==================
+struct SensorReadings {
+  float temperature;
+  float humidity;
+  int mq135_raw;
+  int co2_ppm;
+  int nh3_ppm;
+  int ch4_ppm;
+  int co_ppm;
+  String airQualityStatus;
+  bool isLight;
+  bool motionDetected;
+};
+
+struct EmailStats {
+  int unreadEmails;
+  int priorityEmails;
+  int unreadPriorityEmails;
+  String lastEmailSummary;
+  bool hasNewEmail;
+  bool hasPriorityEmail;
+};
+
+SensorReadings currentReadings;
+EmailStats emailStats = {0, 0, 0, "", false, false};
+
+// Display states
+enum DisplayState {
+  DISPLAY_SENSORS,
+  DISPLAY_EMAIL_SUMMARY,
+  DISPLAY_SUGGESTION
+};
+
+DisplayState currentDisplay = DISPLAY_SENSORS;
+bool envLedState = false;
+unsigned long lastEnvLedToggle = 0;
+const long envLedToggleInterval = 1000;
+
+// ================== Suggestions Array ==================
+const String suggestions[] = {
+  "Check your emails!",
+  "Stay hydrated today!",
+  "Fresh air detected!",
+  "Good environment!",
+  "Monitor your health!",
+  "Perfect temperature!",
+  "Air quality excellent!",
+  "Stay productive!",
+  "Humidity optimal!",
+  "Environment safe!",
+  "Priority emails wait!",
+  "Inbox needs attention!",
+  "Clear air, clear mind!",
+  "Temperature balanced!",
+  "Motion detected!",
+  "Light level good!",
+  "Breathe easy!",
+  "Stay connected!",
+  "IoT monitoring you!",
+  "Smart home active!"
+};
+const int numSuggestions = sizeof(suggestions) / sizeof(suggestions[0]);
+int currentSuggestionIndex = 0;
+
+// ================== WiFi Functions ==================
 void setup_wifi() {
   delay(10);
   lcd.setCursor(0, 0);
@@ -88,15 +170,26 @@ void setup_wifi() {
 }
 
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
   }
-  Serial.println();
 
-  // Handle incoming messages if needed
+  Serial.println("MQTT received:");
+  Serial.println("Topic: " + String(topic));
+  Serial.println("Message: " + message);
+
+  String topicStr = String(topic);
+
+  if (topicStr == TOPIC_EMAIL_NEW || topicStr == TOPIC_EMAIL_NOTIFICATIONS) {
+    handleEmailNotification(message);
+  } else if (topicStr == TOPIC_EMAIL_PRIORITY) {
+    handlePriorityEmailNotification(message);
+  } else if (topicStr == TOPIC_EMAIL_ALL_READ) {
+    handleAllEmailsRead();
+  } else if (topicStr == TOPIC_EMAIL_PRIORITY_READ) {
+    handlePriorityEmailsRead();
+  }
 }
 
 void mqtt_reconnect() {
@@ -114,8 +207,14 @@ void mqtt_reconnect() {
         // Publish a connection message
         mqtt.publish(mqtt_status_topic, "{\"status\":\"connected\",\"device\":\"ESP32_AuraLink\"}");
         
-        // Subscribe to control topics if needed
-        // mqtt.subscribe("auralink/control");
+        // Subscribe to email topics
+        mqtt.subscribe(TOPIC_EMAIL_NOTIFICATIONS);
+        mqtt.subscribe(TOPIC_EMAIL_NEW);
+        mqtt.subscribe(TOPIC_EMAIL_PRIORITY);
+        mqtt.subscribe(TOPIC_EMAIL_ALL_READ);
+        mqtt.subscribe(TOPIC_EMAIL_PRIORITY_READ);
+        
+        Serial.println("Subscribed to email topics");
         
       } else {
         Serial.print("failed, rc=");
@@ -128,8 +227,430 @@ void mqtt_reconnect() {
   }
 }
 
+// ================== Email Notification Handlers ==================
+void handleEmailNotification(String message) {
+  JsonDocument doc;
+  deserializeJson(doc, message);
+
+  String type = doc["type"];
+
+  if (type == "new_emails") {
+    int count = doc["count"];
+    String summary = doc["summary"] | "";
+    
+    Serial.println("New email: " + String(count));
+    
+    emailStats.unreadEmails = count;
+    emailStats.hasNewEmail = true;
+    
+    if (summary.length() > 0) {
+      // Truncate to 80 characters
+      if (summary.length() > 80) {
+        emailStats.lastEmailSummary = summary.substring(0, 80);
+      } else {
+        emailStats.lastEmailSummary = summary;
+      }
+      
+      // Display email summary
+      currentDisplay = DISPLAY_EMAIL_SUMMARY;
+      emailDisplayStartTime = millis();
+      displayEmailSummary(emailStats.lastEmailSummary);
+    }
+    
+    // Turn on blue LED
+    digitalWrite(EMAIL_BLUE_LED_PIN, HIGH);
+    
+    // 3 beeps for new email
+    beepPattern(3, 200, 150);
+    
+  } else if (type == "email_statistics") {
+    emailStats.unreadEmails = doc["unread"] | 0;
+    emailStats.priorityEmails = doc["priority"] | 0;
+    emailStats.unreadPriorityEmails = doc["unread_priority"] | 0;
+    
+    Serial.println("Email stats: unread=" + String(emailStats.unreadEmails) + 
+                   ", priority=" + String(emailStats.unreadPriorityEmails));
+    
+    controlEmailLEDs();
+  }
+}
+
+void handlePriorityEmailNotification(String message) {
+  JsonDocument doc;
+  deserializeJson(doc, message);
+
+  String type = doc["type"];
+
+  if (type == "priority_emails") {
+    int count = doc["count"];
+    String summary = doc["summary"] | "";
+    
+    Serial.println("Priority email: " + String(count));
+    
+    emailStats.priorityEmails = count;
+    emailStats.unreadPriorityEmails = count;
+    emailStats.hasPriorityEmail = true;
+    
+    if (summary.length() > 0) {
+      // Truncate to 80 characters
+      if (summary.length() > 80) {
+        emailStats.lastEmailSummary = summary.substring(0, 80);
+      } else {
+        emailStats.lastEmailSummary = summary;
+      }
+      
+      // Display email summary
+      currentDisplay = DISPLAY_EMAIL_SUMMARY;
+      emailDisplayStartTime = millis();
+      displayEmailSummary(emailStats.lastEmailSummary);
+    }
+    
+    // Turn on red LED
+    digitalWrite(EMAIL_RED_LED_PIN, HIGH);
+    
+    // 4 long beeps for priority email
+    beepPattern(4, 400, 200);
+  }
+}
+
+void handleAllEmailsRead() {
+  Serial.println("All emails read");
+  emailStats.unreadEmails = 0;
+  digitalWrite(EMAIL_BLUE_LED_PIN, LOW);
+  beepPattern(1, 100, 0);
+}
+
+void handlePriorityEmailsRead() {
+  Serial.println("Priority emails read");
+  emailStats.unreadPriorityEmails = 0;
+  digitalWrite(EMAIL_RED_LED_PIN, LOW);
+  beepPattern(2, 100, 100);
+}
+
+// ================== LED Control Functions ==================
+void controlEmailLEDs() {
+  // Blue LED for unread emails - turns ON when unread count >= 1
+  if (emailStats.unreadEmails >= 1) {
+    digitalWrite(EMAIL_BLUE_LED_PIN, HIGH);
+  } else {
+    digitalWrite(EMAIL_BLUE_LED_PIN, LOW);
+  }
+  
+  // Red LED for priority emails
+  if (emailStats.unreadPriorityEmails > 0) {
+    digitalWrite(EMAIL_RED_LED_PIN, HIGH);
+  } else {
+    digitalWrite(EMAIL_RED_LED_PIN, LOW);
+  }
+}
+
+void controlEnvironmentLED() {
+  // Check all sensor parameters for good environment
+  bool airQualityGood = (currentReadings.airQualityStatus == "Excellent" || 
+                         currentReadings.airQualityStatus == "Good");
+  bool temperatureGood = (currentReadings.temperature >= 18.0 && currentReadings.temperature <= 30.0);
+  bool humidityGood = (currentReadings.humidity >= 30.0 && currentReadings.humidity <= 70.0);
+  bool co2Good = (currentReadings.co2_ppm < 1000); // CO2 under 1000 ppm is good
+  
+  // All sensors must be good for green LED to blink
+  bool allSensorsGood = airQualityGood && temperatureGood && humidityGood && co2Good;
+  
+  if (allSensorsGood) {
+    // Blink green LED - 1 second ON, 1 second OFF (smooth blinking)
+    if (millis() - lastEnvLedToggle >= envLedToggleInterval) {
+      envLedState = !envLedState;
+      digitalWrite(ENV_GREEN_LED_PIN, envLedState ? HIGH : LOW);
+      lastEnvLedToggle = millis();
+      
+      // Log status periodically
+      static unsigned long lastLog = 0;
+      if (millis() - lastLog >= 10000) { // Every 10 seconds
+        Serial.println("✓ All sensors good - Green LED blinking");
+        lastLog = millis();
+      }
+    }
+  } else {
+    // Turn off green LED if environment is not good
+    digitalWrite(ENV_GREEN_LED_PIN, LOW);
+    envLedState = false;
+    
+    // Log what's wrong periodically
+    static unsigned long lastWarningLog = 0;
+    if (millis() - lastWarningLog >= 30000) { // Every 30 seconds
+      Serial.println("⚠ Environment not optimal:");
+      if (!airQualityGood) Serial.println("  - Air quality: " + currentReadings.airQualityStatus);
+      if (!temperatureGood) Serial.println("  - Temperature: " + String(currentReadings.temperature) + "°C");
+      if (!humidityGood) Serial.println("  - Humidity: " + String(currentReadings.humidity) + "%");
+      if (!co2Good) Serial.println("  - CO2: " + String(currentReadings.co2_ppm) + " ppm");
+      lastWarningLog = millis();
+    }
+  }
+}
+
+// ================== Buzzer Functions ==================
+void beepPattern(int count, int duration, int pause) {
+  for (int i = 0; i < count; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(duration);
+    digitalWrite(BUZZER_PIN, LOW);
+    if (i < count - 1) {
+      delay(pause);
+    }
+  }
+}
+
+// ================== WiFi Monitoring ==================
+void checkWiFiStatus() {
+  static unsigned long lastWiFiCheck = 0;
+  static bool wifiWasConnected = true;
+  static bool isBeeping = false;
+  static unsigned long lastBeep = 0;
+
+  if (millis() - lastWiFiCheck > 5000) {
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+
+    if (!wifiConnected && wifiWasConnected) {
+      Serial.println("WiFi disconnected! Beeping...");
+      isBeeping = true;
+    } else if (wifiConnected && !wifiWasConnected) {
+      Serial.println("WiFi reconnected!");
+      isBeeping = false;
+      digitalWrite(BUZZER_PIN, LOW);
+    }
+
+    wifiWasConnected = wifiConnected;
+    lastWiFiCheck = millis();
+  }
+
+  if (isBeeping && (millis() - lastBeep > 1000)) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(200);
+    digitalWrite(BUZZER_PIN, LOW);
+    lastBeep = millis();
+  }
+}
+
+// ================== Sensor Reading ==================
+void readAllSensors() {
+  // Read DHT22
+  currentReadings.temperature = dht.readTemperature();
+  currentReadings.humidity = dht.readHumidity();
+
+  if (isnan(currentReadings.temperature) || isnan(currentReadings.humidity)) {
+    Serial.println("DHT22 read error!");
+    currentReadings.temperature = 0.0;
+    currentReadings.humidity = 0.0;
+  }
+
+  // Read MQ135
+  currentReadings.mq135_raw = analogRead(MQ135_PIN);
+  currentReadings.co2_ppm = map(currentReadings.mq135_raw, 0, 4095, 400, 5000);
+  currentReadings.nh3_ppm = map(currentReadings.mq135_raw, 0, 4095, 1, 500);
+  currentReadings.ch4_ppm = map(currentReadings.mq135_raw, 0, 4095, 200, 10000);
+  currentReadings.co_ppm = map(currentReadings.mq135_raw, 0, 4095, 1, 1000);
+  currentReadings.airQualityStatus = airQualityStatus(currentReadings.mq135_raw);
+
+  // Read LDR and control ambient LED
+  int lightState = digitalRead(LDR_PIN);
+  currentReadings.isLight = (lightState == HIGH);
+  
+  if (lightState == LOW) {
+    digitalWrite(LED_PIN, HIGH);  // Dark - turn ON LED
+    lcd.backlight();
+  } else {
+    digitalWrite(LED_PIN, LOW);   // Bright - turn OFF LED
+    lcd.backlight();
+  }
+
+  // Read motion sensor
+  currentReadings.motionDetected = (digitalRead(PIR_PIN) == HIGH);
+
+  Serial.println("=== Sensors ===");
+  Serial.println("Temp: " + String(currentReadings.temperature, 1) + "°C");
+  Serial.println("Humidity: " + String(currentReadings.humidity, 1) + "%");
+  Serial.println("Air: " + currentReadings.airQualityStatus);
+  Serial.println("CO2: " + String(currentReadings.co2_ppm) + "ppm");
+}
+
+// ================== Display Functions ==================
+void displayEmailSummary(String summary) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("*** NEW EMAIL ***");
+  
+  // Display 80 characters across 3 lines (20 chars per line)
+  int len = summary.length();
+  
+  if (len <= 20) {
+    lcd.setCursor(0, 1);
+    lcd.print(summary);
+  } else if (len <= 40) {
+    lcd.setCursor(0, 1);
+    lcd.print(summary.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(summary.substring(20));
+  } else if (len <= 60) {
+    lcd.setCursor(0, 1);
+    lcd.print(summary.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(summary.substring(20, 40));
+    lcd.setCursor(0, 3);
+    lcd.print(summary.substring(40));
+  } else {
+    lcd.setCursor(0, 1);
+    lcd.print(summary.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(summary.substring(20, 40));
+    lcd.setCursor(0, 3);
+    lcd.print(summary.substring(40, 60));
+  }
+  
+  Serial.println("Displaying email: " + summary);
+}
+
+String getContextualSuggestion() {
+  String suggestion = "";
+  
+  if (emailStats.unreadPriorityEmails > 0) {
+    suggestion = "Urgent: " + String(emailStats.unreadPriorityEmails) + " priority!";
+  } else if (emailStats.unreadEmails > 0) {
+    suggestion = String(emailStats.unreadEmails) + " unread emails";
+  } else if (currentReadings.airQualityStatus == "Excellent") {
+    suggestion = "Air quality perfect!";
+  } else if (currentReadings.airQualityStatus == "Poor" || currentReadings.airQualityStatus == "Hazardous") {
+    suggestion = "Warning: Poor air!";
+  } else if (currentReadings.temperature > 30) {
+    suggestion = "High temperature!";
+  } else if (currentReadings.humidity < 30) {
+    suggestion = "Low humidity!";
+  } else if (currentReadings.humidity > 70) {
+    suggestion = "High humidity!";
+  } else {
+    suggestion = suggestions[currentSuggestionIndex];
+    currentSuggestionIndex = (currentSuggestionIndex + 1) % numSuggestions;
+  }
+  
+  return suggestion;
+}
+
+void displaySuggestion() {
+  String suggestion = getContextualSuggestion();
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("*** SUGGESTION ***");
+  
+  int len = suggestion.length();
+  
+  if (len <= 20) {
+    lcd.setCursor(0, 2);
+    lcd.print(suggestion);
+  } else if (len <= 40) {
+    lcd.setCursor(0, 1);
+    lcd.print(suggestion.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(suggestion.substring(20));
+  } else {
+    lcd.setCursor(0, 1);
+    lcd.print(suggestion.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(suggestion.substring(20, 40));
+  }
+  
+  Serial.println("Suggestion: " + suggestion);
+}
+
+void updateLCD() {
+  if (currentDisplay != DISPLAY_SENSORS) {
+    return;
+  }
+  
+  lcd.clear();
+
+  // Line 1: Temperature and Humidity
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(currentReadings.temperature, 1);
+  lcd.print((char)223);
+  lcd.print("C H:");
+  lcd.print(currentReadings.humidity, 0);
+  lcd.print("%");
+
+  // Line 2: Unread emails
+  lcd.setCursor(0, 1);
+  lcd.print("Emails:");
+  lcd.print(emailStats.unreadEmails);
+  lcd.print("/P:");
+  lcd.print(emailStats.unreadPriorityEmails);
+
+  // Line 3: CO2
+  lcd.setCursor(0, 2);
+  lcd.print("CO2:");
+  lcd.print(currentReadings.co2_ppm);
+  lcd.print("ppm");
+
+  // Line 4: Air quality status + WiFi
+  lcd.setCursor(0, 3);
+  lcd.print("Air:");
+  String statusShort = currentReadings.airQualityStatus.substring(0, min(8, (int)currentReadings.airQualityStatus.length()));
+  lcd.print(statusShort);
+  
+  // WiFi indicator
+  lcd.setCursor(14, 3);
+  if (WiFi.status() == WL_CONNECTED) {
+    lcd.print("WiFi+");
+  } else {
+    lcd.print("WiFi-");
+  }
+}
+
+void publishSensorData() {
+  if (!mqtt.connected()) {
+    return;
+  }
+
+  JsonDocument doc;
+  
+  doc["temperature"] = currentReadings.temperature;
+  doc["humidity"] = currentReadings.humidity;
+  doc["airQualityRaw"] = currentReadings.mq135_raw;
+  doc["co2"] = currentReadings.co2_ppm;
+  doc["nh3"] = currentReadings.nh3_ppm;
+  doc["ch4"] = currentReadings.ch4_ppm;
+  doc["co"] = currentReadings.co_ppm;
+  doc["airQualityStatus"] = currentReadings.airQualityStatus;
+  doc["isLight"] = currentReadings.isLight;
+  doc["motionDetected"] = currentReadings.motionDetected;
+  doc["deviceId"] = mqtt_client_id;
+  doc["timestamp"] = millis();
+  
+  char jsonBuffer[512];
+  serializeJson(doc, jsonBuffer);
+  
+  if (mqtt.publish(mqtt_topic, jsonBuffer)) {
+    Serial.println("Published to MQTT");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
+  Serial.println("Starting ESP32 AuraLink Monitor...");
+
+  // Initialize pins
+  pinMode(LDR_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(PIR_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(EMAIL_BLUE_LED_PIN, OUTPUT);
+  pinMode(EMAIL_RED_LED_PIN, OUTPUT);
+  pinMode(ENV_GREEN_LED_PIN, OUTPUT);
+
+  // Turn off all outputs initially
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(EMAIL_BLUE_LED_PIN, LOW);
+  digitalWrite(EMAIL_RED_LED_PIN, LOW);
+  digitalWrite(ENV_GREEN_LED_PIN, LOW);
 
   // I2C initialization
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -141,18 +662,16 @@ void setup() {
   // DHT22 initialization
   dht.begin();
 
-  // Pin modes
-  pinMode(LDR_PIN, INPUT);
-  pinMode(LED_PIN, OUTPUT);
-  // PIR motion sensor input
-  pinMode(PIR_PIN, INPUT);
-
   // Welcome screen
   lcd.setCursor(0, 0);
-  lcd.print("ESP32 Air Monitor");
+  lcd.print("  ESP32 AuraLink  ");
   lcd.setCursor(0, 1);
-  lcd.print("Initializing...");
-  delay(2000);
+  lcd.print(" Environmental    ");
+  lcd.setCursor(0, 2);
+  lcd.print("    Monitor       ");
+  lcd.setCursor(0, 3);
+  lcd.print("  Initializing... ");
+  delay(3000);
   lcd.clear();
   
   // Setup WiFi
@@ -161,6 +680,8 @@ void setup() {
   // Setup MQTT
   mqtt.setServer(mqtt_server, mqtt_port);
   mqtt.setCallback(mqtt_callback);
+  
+  Serial.println("ESP32 AuraLink initialized!");
 }
 
 String airQualityStatus(int value) {
@@ -171,139 +692,63 @@ String airQualityStatus(int value) {
   else return "Hazardous";
 }
 
-void publishSensorData(float temperature, float humidity, int mq135_value, 
-                      int co2_ppm, int nh3_ppm, int ch4_ppm, int co_ppm, 
-                      String status, int lightState, bool motionDetected) {
-  // Create JSON document
-  StaticJsonDocument<256> doc;
-  
-  // Add sensor data
-  doc["temperature"] = temperature;
-  doc["humidity"] = humidity;
-  doc["airQualityRaw"] = mq135_value;
-  doc["co2"] = co2_ppm;
-  doc["nh3"] = nh3_ppm;
-  doc["ch4"] = ch4_ppm;
-  doc["co"] = co_ppm;
-  doc["airQualityStatus"] = status;
-  doc["isLight"] = (lightState == HIGH);
-  doc["motionDetected"] = motionDetected;
-  doc["deviceId"] = mqtt_client_id;
-  doc["timestamp"] = millis();
-  
-  // Convert to JSON string
-  char jsonBuffer[256];
-  serializeJson(doc, jsonBuffer);
-  
-  // Publish to MQTT
-  if (mqtt.connected()) {
-    mqtt.publish(mqtt_topic, jsonBuffer);
-    Serial.println("Data published to MQTT");
-    Serial.println(jsonBuffer);
-  } else {
-    Serial.println("MQTT disconnected, data not sent");
-  }
-}
-
+// ================== Main Loop ==================
 void loop() {
-  // Check MQTT connection
-  if (WiFi.status() == WL_CONNECTED && !mqtt.connected()) {
+  // Check WiFi status
+  checkWiFiStatus();
+
+  // Maintain MQTT connection
+  if (!mqtt.connected()) {
     mqtt_reconnect();
   }
-  
-  // Keep MQTT client connected
-  if (mqtt.connected()) {
-    mqtt.loop();
-  }
-  
-  // === LDR Light Detection ===
-  int lightState = digitalRead(LDR_PIN);
+  mqtt.loop();
 
-  if (lightState == LOW) { 
-    // Dark condition
-    digitalWrite(LED_PIN, LOW);  // Turn ON external LED
-    lcd.noBacklight();              // Turn ON LCD backlight
-    Serial.println("Environment: Dark - LED & Backlight ON");
-  } else {
-    // Bright condition
-    digitalWrite(LED_PIN, HIGH);   // Turn OFF external LED
-    lcd.backlight();            // Turn OFF LCD backlight
-    Serial.println("Environment: Bright - LED & Backlight OFF");
+  // Read sensors every 2 seconds
+  static unsigned long lastSensorRead = 0;
+  if (millis() - lastSensorRead >= 2000) {
+    readAllSensors();
+    lastSensorRead = millis();
   }
 
-  // === DHT22 ===
-  float humidity = dht.readHumidity();
-  float temperature = dht.readTemperature();
+  // Control environment LED
+  controlEnvironmentLED();
 
-  if (isnan(humidity) || isnan(temperature)) {
-    Serial.println("Failed to read from DHT22!");
-    lcd.setCursor(0, 0);
-    lcd.print("DHT22 Error       ");
-    delay(2000);
-    return;
+  // Handle email summary display timeout
+  if (currentDisplay == DISPLAY_EMAIL_SUMMARY && 
+      millis() - emailDisplayStartTime >= emailDisplayDuration) {
+    currentDisplay = DISPLAY_SENSORS;
+    updateLCD();
   }
 
-  // === MQ135 ===
-  int mq135_value = analogRead(MQ135_PIN);
-  int co2_ppm = map(mq135_value, 0, 4095, 400, 5000);
-  int nh3_ppm = map(mq135_value, 0, 4095, 1, 500);
-  int ch4_ppm = map(mq135_value, 0, 4095, 200, 10000);
-  int co_ppm  = map(mq135_value, 0, 4095, 1, 1000);
-
-  String status = airQualityStatus(mq135_value);
-
-  // === Serial Monitor Output ===
-  Serial.print("Temp: "); Serial.print(temperature); Serial.print(" C  ");
-  Serial.print("Humidity: "); Serial.print(humidity); Serial.println(" %");
-  Serial.print("MQ135 Raw: "); Serial.print(mq135_value);
-  Serial.print(" | CO2: "); Serial.print(co2_ppm);
-  Serial.print(" ppm, NH3: "); Serial.print(nh3_ppm);
-  Serial.print(" ppm, CH4: "); Serial.print(ch4_ppm);
-  Serial.print(" ppm, CO: "); Serial.print(co_ppm);
-  Serial.print(" ppm | Status: "); Serial.println(status);
-
-  // === LCD Output ===
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("T:");
-  lcd.print(temperature, 1);
-  lcd.print((char)223);
-  lcd.print("C H:");
-  lcd.print(humidity, 0);
-  lcd.print("%");
-
-  lcd.setCursor(0, 1);
-  lcd.print("CO2:");
-  lcd.print(co2_ppm);
-  lcd.print("ppm");
-
-  lcd.setCursor(0, 2);
-  lcd.print("NH3:");
-  lcd.print(nh3_ppm);
-  lcd.print(" CH4:");
-  lcd.print(ch4_ppm);
-
-  lcd.setCursor(0, 3);
-  lcd.print("Air: ");
-  lcd.print(status);
-
-  // Publish sensor data to MQTT every msgInterval
-  unsigned long now = millis();
-  if (now - lastMsgTime > msgInterval) {
-    lastMsgTime = now;
-    // Read motion sensor
-    int motionState = digitalRead(PIR_PIN);
-    bool motionDetected = (motionState == HIGH);
-
-    // Update LCD last line briefly with motion status
-    lcd.setCursor(0, 3);
-    lcd.print("Air: ");
-    lcd.print(status);
-    lcd.print(" ");
-    lcd.print(motionDetected ? "M:Yes" : "M:No ");
-
-    publishSensorData(temperature, humidity, mq135_value, co2_ppm, nh3_ppm, ch4_ppm, co_ppm, status, lightState, motionDetected);
+  // Handle suggestion display
+  if (currentDisplay == DISPLAY_SUGGESTION && 
+      millis() - suggestionStartTime >= suggestionDuration) {
+    currentDisplay = DISPLAY_SENSORS;
+    updateLCD();
   }
 
-  delay(2000);
+  // Show suggestion periodically
+  if (currentDisplay == DISPLAY_SENSORS && 
+      millis() - lastSuggestionTime >= suggestionInterval) {
+    currentDisplay = DISPLAY_SUGGESTION;
+    suggestionStartTime = millis();
+    lastSuggestionTime = millis();
+    displaySuggestion();
+  }
+
+  // Update LCD for sensor display
+  static unsigned long lastLcdUpdate = 0;
+  if (currentDisplay == DISPLAY_SENSORS && 
+      millis() - lastLcdUpdate >= 2000) {
+    updateLCD();
+    lastLcdUpdate = millis();
+  }
+
+  // Publish sensor data to MQTT
+  if (millis() - lastMsgTime >= msgInterval) {
+    publishSensorData();
+    lastMsgTime = millis();
+  }
+
+  delay(100);
 }

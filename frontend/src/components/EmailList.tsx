@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { EmailMessage } from '../types/Email';
-import { deleteSentEmail, deleteReceivedEmail } from '../services/EmailService';
+import { deleteSentEmail, deleteReceivedEmail, markEmailAsRead } from '../services/EmailService';
 import './EmailList.css';
 
 interface EmailListProps {
@@ -15,12 +15,50 @@ const EmailList: React.FC<EmailListProps> = ({ emails, title, onRefresh, loading
   const [selectedEmail, setSelectedEmail] = useState<EmailMessage | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [readEmailIds, setReadEmailIds] = useState<Set<string>>(new Set());
 
   const filteredEmails = emails.filter(email =>
     email.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
     email.from.toLowerCase().includes(searchQuery.toLowerCase()) ||
     email.body.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Separate unread and read emails (only for received emails)
+  // Check both backend isRead and local readEmailIds state
+  const unreadEmails = emailType === 'received' 
+    ? filteredEmails.filter(email => !email.isRead && !readEmailIds.has(email.id))
+    : [];
+  const readEmails = emailType === 'received'
+    ? filteredEmails.filter(email => email.isRead || readEmailIds.has(email.id))
+    : filteredEmails;
+
+  const handleEmailClick = async (email: EmailMessage) => {
+    setSelectedEmail(email);
+    
+    // Mark as read if it's a received email and not already read
+    if (emailType === 'received' && !email.isRead && !readEmailIds.has(email.id)) {
+      try {
+        // Immediately update local state for instant UI feedback
+        setReadEmailIds(prev => new Set(prev).add(email.id));
+        
+        // Call backend to persist the change
+        await markEmailAsRead(email.id);
+        
+        // Refresh to get updated data from backend
+        if (onRefresh) {
+          onRefresh();
+        }
+      } catch (error) {
+        console.error('Error marking email as read:', error);
+        // Revert local state on error
+        setReadEmailIds(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(email.id);
+          return newSet;
+        });
+      }
+    }
+  };
 
   const handleDeleteEmail = async (emailId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -114,61 +152,189 @@ const EmailList: React.FC<EmailListProps> = ({ emails, title, onRefresh, loading
 
       <div className="email-list-content">
         <div className="email-list">
-          {filteredEmails.length === 0 ? (
-            <div className="no-emails">
-              {searchQuery ? 'No emails found matching your search' : 'No emails to display'}
-            </div>
-          ) : (
-            filteredEmails.map((email) => (
-              <div
-                key={email.id}
-                className={`email-item ${selectedEmail?.id === email.id ? 'selected' : ''}`}
-                onClick={() => setSelectedEmail(email)}
-              >
-                <div className="email-item-header">
-                  <span className="email-from">{email.from}</span>
-                  <div className="email-badges">
-                    {email.priority && (
-                      <span
-                        className="email-priority"
-                        style={{ backgroundColor: getPriorityColor(email.priority) }}
-                      >
-                        {getPriorityLabel(email.priority)}
-                      </span>
-                    )}
-                    <span
-                      className="email-status"
-                      style={{ backgroundColor: getStatusColor(email.status) }}
+          {emailType === 'received' ? (
+            <>
+              {/* Unread Emails Section */}
+              {unreadEmails.length > 0 && (
+                <>
+                  <div className="email-section-header">
+                    <strong>📬 Unread ({unreadEmails.length})</strong>
+                  </div>
+                  {unreadEmails.map((email) => (
+                    <div
+                      key={email.id}
+                      className={`email-item unread ${selectedEmail?.id === email.id ? 'selected' : ''}`}
+                      onClick={() => handleEmailClick(email)}
                     >
-                      {email.status}
-                    </span>
-                    {emailType && (
-                      <button
-                        className="delete-email-btn"
-                        onClick={(e) => handleDeleteEmail(email.id, e)}
-                        disabled={deleting === email.id}
-                        title="Delete email"
-                      >
-                        {deleting === email.id ? '⏳' : '🗑️'}
-                      </button>
+                      <div className="email-item-header">
+                        <span className="email-from" style={{ fontWeight: 'bold' }}>{email.from}</span>
+                        <div className="email-badges">
+                          {email.priority && (
+                            <span
+                              className="email-priority"
+                              style={{ backgroundColor: getPriorityColor(email.priority) }}
+                            >
+                              {getPriorityLabel(email.priority)}
+                            </span>
+                          )}
+                          <span
+                            className="email-status"
+                            style={{ backgroundColor: getStatusColor(email.status) }}
+                          >
+                            {email.status}
+                          </span>
+                          <button
+                            className="delete-email-btn"
+                            onClick={(e) => handleDeleteEmail(email.id, e)}
+                            disabled={deleting === email.id}
+                            title="Delete email"
+                          >
+                            {deleting === email.id ? '⏳' : '🗑️'}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="email-subject" style={{ fontWeight: 'bold' }}>{email.subject}</div>
+                      {email.summary && (
+                        <div className="email-summary">
+                          <strong>AI Summary:</strong> {email.summary}
+                        </div>
+                      )}
+                      <div className="email-preview">
+                        {email.body.substring(0, 100)}
+                        {email.body.length > 100 && '...'}
+                      </div>
+                      <div className="email-date">
+                        {formatDate(email.sentAt || email.receivedAt)}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {/* Read Emails Section */}
+              {readEmails.length > 0 && (
+                <>
+                  <div className="email-section-header">
+                    <strong>📭 Read ({readEmails.length})</strong>
+                  </div>
+                  {readEmails.map((email) => (
+                    <div
+                      key={email.id}
+                      className={`email-item ${selectedEmail?.id === email.id ? 'selected' : ''}`}
+                      onClick={() => handleEmailClick(email)}
+                    >
+                      <div className="email-item-header">
+                        <span className="email-from">{email.from}</span>
+                        <div className="email-badges">
+                          {email.priority && (
+                            <span
+                              className="email-priority"
+                              style={{ backgroundColor: getPriorityColor(email.priority) }}
+                            >
+                              {getPriorityLabel(email.priority)}
+                            </span>
+                          )}
+                          <span
+                            className="email-status"
+                            style={{ backgroundColor: getStatusColor(email.status) }}
+                          >
+                            {email.status}
+                          </span>
+                          <button
+                            className="delete-email-btn"
+                            onClick={(e) => handleDeleteEmail(email.id, e)}
+                            disabled={deleting === email.id}
+                            title="Delete email"
+                          >
+                            {deleting === email.id ? '⏳' : '🗑️'}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="email-subject">{email.subject}</div>
+                      {email.summary && (
+                        <div className="email-summary">
+                          <strong>AI Summary:</strong> {email.summary}
+                        </div>
+                      )}
+                      <div className="email-preview">
+                        {email.body.substring(0, 100)}
+                        {email.body.length > 100 && '...'}
+                      </div>
+                      <div className="email-date">
+                        {formatDate(email.sentAt || email.receivedAt)}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {/* No emails message */}
+              {unreadEmails.length === 0 && readEmails.length === 0 && (
+                <div className="no-emails">
+                  {searchQuery ? 'No emails found matching your search' : 'No emails to display'}
+                </div>
+              )}
+            </>
+          ) : (
+            /* Sent Emails - No read/unread separation */
+            <>
+              {filteredEmails.length === 0 ? (
+                <div className="no-emails">
+                  {searchQuery ? 'No emails found matching your search' : 'No emails to display'}
+                </div>
+              ) : (
+                filteredEmails.map((email) => (
+                  <div
+                    key={email.id}
+                    className={`email-item ${selectedEmail?.id === email.id ? 'selected' : ''}`}
+                    onClick={() => setSelectedEmail(email)}
+                  >
+                    <div className="email-item-header">
+                      <span className="email-from">{email.from}</span>
+                      <div className="email-badges">
+                        {email.priority && (
+                          <span
+                            className="email-priority"
+                            style={{ backgroundColor: getPriorityColor(email.priority) }}
+                          >
+                            {getPriorityLabel(email.priority)}
+                          </span>
+                        )}
+                        <span
+                          className="email-status"
+                          style={{ backgroundColor: getStatusColor(email.status) }}
+                        >
+                          {email.status}
+                        </span>
+                        {emailType && (
+                          <button
+                            className="delete-email-btn"
+                            onClick={(e) => handleDeleteEmail(email.id, e)}
+                            disabled={deleting === email.id}
+                            title="Delete email"
+                          >
+                            {deleting === email.id ? '⏳' : '🗑️'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="email-subject">{email.subject}</div>
+                    {email.summary && (
+                      <div className="email-summary">
+                        <strong>AI Summary:</strong> {email.summary}
+                      </div>
                     )}
+                    <div className="email-preview">
+                      {email.body.substring(0, 100)}
+                      {email.body.length > 100 && '...'}
+                    </div>
+                    <div className="email-date">
+                      {formatDate(email.sentAt || email.receivedAt)}
+                    </div>
                   </div>
-                </div>
-                <div className="email-subject">{email.subject}</div>
-                {email.summary && (
-                  <div className="email-summary">
-                    <strong>AI Summary:</strong> {email.summary}
-                  </div>
-                )}
-                <div className="email-preview">
-                  {email.body.substring(0, 100)}
-                  {email.body.length > 100 && '...'}
-                </div>
-                <div className="email-date">
-                  {formatDate(email.sentAt || email.receivedAt)}
-                </div>
-              </div>
-            ))
+                ))
+              )}
+            </>
           )}
         </div>
 
@@ -224,6 +390,24 @@ const EmailList: React.FC<EmailListProps> = ({ emails, title, onRefresh, loading
                     style={{ backgroundColor: getPriorityColor(selectedEmail.priority) }}
                   >
                     {getPriorityLabel(selectedEmail.priority)}
+                  </span>
+                </div>
+              )}
+              {emailType === 'received' && (
+                <div className="email-meta-row">
+                  <strong>Read Status:</strong>{' '}
+                  <span
+                    className="email-read-status"
+                    style={{ 
+                      backgroundColor: (selectedEmail.isRead || readEmailIds.has(selectedEmail.id)) ? '#4caf50' : '#ff9800',
+                      color: 'white',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: 600
+                    }}
+                  >
+                    {(selectedEmail.isRead || readEmailIds.has(selectedEmail.id)) ? '✓ READ' : '⚠ UNREAD'}
                   </span>
                 </div>
               )}

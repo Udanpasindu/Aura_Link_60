@@ -343,4 +343,26 @@ public class EmailController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
+
+    /**
+     * Mark an email as read
+     * PUT /api/email/received/{id}/read
+     */
+    @PutMapping("/received/{id}/read")
+    public ResponseEntity<Map<String, String>> markEmailAsRead(@PathVariable String id) {
+        try {
+            boolean success = emailReceiverService.markAsRead(id);
+            Map<String, String> response = new HashMap<>();
+            if (success) {
+                response.put("message", "Email marked as read");
+                return ResponseEntity.ok(response);
+            } else {
+                response.put("message", "Email not found");
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error marking email as read: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 }

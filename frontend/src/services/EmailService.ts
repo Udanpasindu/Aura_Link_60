@@ -164,3 +164,11 @@ export const getEmailsByPriority = async (priority: string): Promise<EmailMessag
   const response = await axios.get<EmailMessage[]>(`${API_URL}/priority/${priority}`);
   return response.data;
 };
+
+/**
+ * Mark an email as read
+ */
+export const markEmailAsRead = async (id: string): Promise<{ message: string }> => {
+  const response = await axios.put<{ message: string }>(`${API_URL}/received/${id}/read`);
+  return response.data;
+};

@@ -72,6 +72,15 @@ const EmailDashboard: React.FC = () => {
     }
   };
 
+  const handleRefreshReceivedEmails = async () => {
+    try {
+      await loadReceivedEmails();
+      await loadStats();
+    } catch (error) {
+      console.error('Error refreshing received emails:', error);
+    }
+  };
+
   const handleRefreshAll = async () => {
     setLoading(true);
     try {
@@ -257,7 +266,7 @@ const EmailDashboard: React.FC = () => {
           <EmailList
             emails={receivedEmails}
             title="Received Emails"
-            onRefresh={handleFetchNewEmails}
+            onRefresh={handleRefreshReceivedEmails}
             loading={loading}
             emailType="received"
           />

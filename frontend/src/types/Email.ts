@@ -14,6 +14,7 @@ export interface EmailMessage {
   errorMessage?: string;
   summary?: string;
   priority?: string;
+  isRead?: boolean;
 }
 
 export interface EmailRequest {

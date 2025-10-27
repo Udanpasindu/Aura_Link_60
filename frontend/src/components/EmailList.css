@@ -74,11 +74,26 @@
   border-right: 1px solid #e0e0e0;
 }
 
+.email-section-header {
+  padding: 12px 15px;
+  background-color: #f0f0f0;
+  border-bottom: 2px solid #ddd;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  font-size: 14px;
+  color: #555;
+}
+
 .email-item {
   padding: 15px;
   border-bottom: 1px solid #e0e0e0;
   cursor: pointer;
   transition: background-color 0.2s;
+}
+
+.email-item.unread {
+  background-color: #f8f9fa;
 }
 
 .email-item:hover {

@@ -24,6 +24,12 @@ public class EmailReceiverService {
     @Autowired
     private HuggingFaceService huggingFaceService;
 
+    @Autowired
+    private EmailMqttService emailMqttService;
+
+    @Autowired
+    private EmailStorageService emailStorageService;
+
     @Value("${mail.imap.host}")
     private String imapHost;
 
@@ -109,6 +115,7 @@ public class EmailReceiverService {
             
             Message[] messages = folder.getMessages();
             int newEmailsCount = 0;
+            List<EmailMessage> newHighPriorityEmails = new ArrayList<>();
             
             // Get the last 50 messages (or fewer if there are less)
             int start = Math.max(1, messages.length - 49);
@@ -117,27 +124,76 @@ public class EmailReceiverService {
             for (Message message : recentMessages) {
                 String messageId = getMessageId(message);
                 
+                // Skip if this email was deleted
+                if (emailStorageService.isDeleted(messageId)) {
+                    continue;
+                }
+                
                 // Check if we already have this email
                 boolean exists = receivedEmails.stream()
                         .anyMatch(email -> email.getId().equals(messageId));
                 
                 if (!exists) {
                     EmailMessage emailMessage = convertToEmailMessage(message);
+                    
+                    // Apply stored read status
+                    if (emailStorageService.isRead(messageId)) {
+                        emailMessage.setRead(true);
+                    }
+                    
                     receivedEmails.add(emailMessage);
                     newEmailsCount++;
                     log.debug("New email received from: {}, Subject: {}", 
                             emailMessage.getFrom(), emailMessage.getSubject());
+                    
+                    // Track high-priority emails
+                    if ("HIGH".equalsIgnoreCase(emailMessage.getPriority())) {
+                        newHighPriorityEmails.add(emailMessage);
+                    }
                 }
             }
             
             if (newEmailsCount > 0) {
                 log.info("Fetched {} new email(s)", newEmailsCount);
+                
+                // Publish MQTT notifications for new emails
+                publishNewEmailNotifications(newEmailsCount, newHighPriorityEmails);
             }
             
         } catch (MessagingException e) {
             log.error("Error fetching emails: {}", e.getMessage());
         } finally {
             disconnect();
+        }
+    }
+
+    /**
+     * Publish MQTT notifications for new emails
+     */
+    private void publishNewEmailNotifications(int newEmailsCount, List<EmailMessage> highPriorityEmails) {
+        try {
+            // Get the most recent email summary
+            if (!receivedEmails.isEmpty()) {
+                EmailMessage latestEmail = receivedEmails.get(receivedEmails.size() - 1);
+                String summary = latestEmail.getSummary() != null ? latestEmail.getSummary() : latestEmail.getSubject();
+                
+                // Publish general new email notification
+                emailMqttService.publishNewEmail(newEmailsCount, summary);
+            }
+            
+            // Publish high-priority email notifications
+            if (!highPriorityEmails.isEmpty()) {
+                for (EmailMessage priorityEmail : highPriorityEmails) {
+                    String summary = priorityEmail.getSummary() != null ? priorityEmail.getSummary() : priorityEmail.getSubject();
+                    emailMqttService.publishPriorityEmail(summary);
+                }
+            }
+            
+            // Publish overall statistics
+            publishEmailStatisticsToMqtt();
+            
+        } catch (Exception e) {
+            log.error("Error publishing new email notifications to MQTT", e);
         }
     }
 
@@ -369,17 +425,81 @@ public class EmailReceiverService {
     }
 
     /**
-     * Get unread emails count (placeholder - would need to track read status)
+     * Get unread emails count
      */
     public int getUnreadCount() {
-        return receivedEmails.size();
+        return (int) receivedEmails.stream()
+                .filter(email -> !email.isRead())
+                .count();
+    }
+
+    /**
+     * Mark an email as read
+     */
+    public boolean markAsRead(String id) {
+        EmailMessage email = getReceivedEmailById(id);
+        if (email != null) {
+            email.setRead(true);
+            
+            // Persist to storage
+            emailStorageService.markAsRead(id);
+            
+            log.info("Marked email as read: {}", id);
+            
+            // Publish updated email statistics to MQTT
+            publishEmailStatisticsToMqtt();
+            
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Publish email statistics to MQTT for ESP32
+     */
+    private void publishEmailStatisticsToMqtt() {
+        try {
+            int unreadCount = getUnreadCount();
+            int priorityCount = (int) receivedEmails.stream()
+                    .filter(email -> "HIGH".equalsIgnoreCase(email.getPriority()))
+                    .count();
+            int unreadPriorityCount = (int) receivedEmails.stream()
+                    .filter(email -> !email.isRead() && "HIGH".equalsIgnoreCase(email.getPriority()))
+                    .count();
+
+            emailMqttService.publishEmailStatistics(unreadCount, priorityCount, unreadPriorityCount);
+
+            // Check if all emails are read
+            if (unreadCount == 0) {
+                emailMqttService.publishAllEmailsRead();
+            }
+
+            // Check if all priority emails are read
+            if (unreadPriorityCount == 0 && priorityCount > 0) {
+                emailMqttService.publishPriorityEmailsRead();
+            }
+        } catch (Exception e) {
+            log.error("Error publishing email statistics to MQTT", e);
+        }
     }
 
     /**
      * Delete a received email by ID
      */
     public boolean deleteReceivedEmail(String id) {
-        return receivedEmails.removeIf(email -> email.getId().equals(id));
+        boolean removed = receivedEmails.removeIf(email -> email.getId().equals(id));
+        
+        if (removed) {
+            // Persist deletion to storage
+            emailStorageService.markAsDeleted(id);
+            
+            log.info("Deleted email: {}", id);
+            
+            // Publish updated email statistics to MQTT
+            publishEmailStatisticsToMqtt();
+        }
+        
+        return removed;
     }
 
     /**
