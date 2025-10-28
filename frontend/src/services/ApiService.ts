@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { SensorData } from '../types/SensorData';
+import type { Quote } from '../types/Quote';
 
 const API_URL = 'http://localhost:8080/api';
 
@@ -15,5 +16,15 @@ export const fetchSensorData = async (deviceId: string): Promise<SensorData> => 
 
 export const fetchSensorHistory = async (deviceId: string): Promise<SensorData[]> => {
   const response = await axios.get<SensorData[]>(`${API_URL}/sensors/${deviceId}/history`);
+  return response.data;
+};
+
+export const generateQuote = async (deviceId: string): Promise<Quote> => {
+  const response = await axios.post<Quote>(`${API_URL}/quotes/generate/${deviceId}`);
+  return response.data;
+};
+
+export const generateQuoteFromData = async (sensorData: SensorData): Promise<Quote> => {
+  const response = await axios.post<Quote>(`${API_URL}/quotes/generate`, sensorData);
   return response.data;
 };

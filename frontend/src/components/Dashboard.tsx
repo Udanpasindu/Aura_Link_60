@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import type { SensorData } from '../types/SensorData';
 import { fetchAllSensors, fetchSensorHistory } from '../services/ApiService';
 import webSocketService from '../services/WebSocketService';
+import QuoteDisplay from './QuoteDisplay';
 import { 
   Box, Container, Grid, Paper, Typography, Card, CardContent, 
   CircularProgress, Fade, Grow, Slide, Zoom
@@ -544,6 +545,17 @@ const Dashboard: React.FC = () => {
                     </CardContent>
                   </Card>
                 </Grow>
+              </Grid>
+            </Grid>
+            
+            {/* AI Quote Display */}
+            <Grid container spacing={3} mb={3}>
+              <Grid item xs={12}>
+                <Fade in={true} timeout={1200}>
+                  <Box>
+                    <QuoteDisplay deviceId={selectedDevice} />
+                  </Box>
+                </Fade>
               </Grid>
             </Grid>
             

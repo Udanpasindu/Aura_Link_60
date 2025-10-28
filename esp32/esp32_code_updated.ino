@@ -18,6 +18,7 @@ const char* mqtt_client_id = "ESP32_AuraLink_Client";
 // MQTT Topics
 const char* mqtt_topic = "auralink/sensors";
 const char* mqtt_status_topic = "auralink/status";
+const char* mqtt_quote_topic = "auralink/quotes";
 const char* TOPIC_EMAIL_NOTIFICATIONS = "iot/email/notifications";
 const char* TOPIC_EMAIL_NEW = "iot/email/new";
 const char* TOPIC_EMAIL_PRIORITY = "iot/email/priority";
@@ -35,10 +36,12 @@ unsigned long lastMsgTime = 0;
 unsigned long lastSuggestionTime = 0;
 unsigned long suggestionStartTime = 0;
 unsigned long emailDisplayStartTime = 0;
+unsigned long quoteDisplayStartTime = 0;
 const long msgInterval = 5000;              // Sensor data publish interval
 const long suggestionInterval = 30000;      // Show suggestion every 30 seconds
 const long suggestionDuration = 5000;       // Show suggestion for 5 seconds
 const long emailDisplayDuration = 10000;    // Show email summary for 10 seconds
+const long quoteDisplayDuration = 15000;    // Show AI quote for 15 seconds
 
 // ================== Pin Configuration ==================
 // I2C pins
@@ -84,14 +87,22 @@ struct EmailStats {
   bool hasPriorityEmail;
 };
 
+struct AIQuote {
+  String text;
+  String context;
+  bool hasNewQuote;
+};
+
 SensorReadings currentReadings;
 EmailStats emailStats = {0, 0, 0, "", false, false};
+AIQuote currentQuote = {"", "", false};
 
 // Display states
 enum DisplayState {
   DISPLAY_SENSORS,
   DISPLAY_EMAIL_SUMMARY,
-  DISPLAY_SUGGESTION
+  DISPLAY_SUGGESTION,
+  DISPLAY_AI_QUOTE
 };
 
 DisplayState currentDisplay = DISPLAY_SENSORS;
@@ -189,6 +200,8 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     handleAllEmailsRead();
   } else if (topicStr == TOPIC_EMAIL_PRIORITY_READ) {
     handlePriorityEmailsRead();
+  } else if (topicStr == mqtt_quote_topic) {
+    handleAIQuote(message);
   }
 }
 
@@ -213,8 +226,9 @@ void mqtt_reconnect() {
         mqtt.subscribe(TOPIC_EMAIL_PRIORITY);
         mqtt.subscribe(TOPIC_EMAIL_ALL_READ);
         mqtt.subscribe(TOPIC_EMAIL_PRIORITY_READ);
+        mqtt.subscribe(mqtt_quote_topic);
         
-        Serial.println("Subscribed to email topics");
+        Serial.println("Subscribed to email and quote topics");
         
       } else {
         Serial.print("failed, rc=");
@@ -325,6 +339,37 @@ void handlePriorityEmailsRead() {
   emailStats.unreadPriorityEmails = 0;
   digitalWrite(EMAIL_RED_LED_PIN, LOW);
   beepPattern(2, 100, 100);
+}
+
+// ================== AI Quote Handler ==================
+void handleAIQuote(String message) {
+  JsonDocument doc;
+  deserializeJson(doc, message);
+
+  String quote = doc["quote"] | "";
+  String context = doc["context"] | "";
+  
+  if (quote.length() > 0) {
+    Serial.println("AI Quote received: " + quote);
+    
+    // Truncate to 80 characters for LCD display
+    if (quote.length() > 80) {
+      currentQuote.text = quote.substring(0, 77) + "...";
+    } else {
+      currentQuote.text = quote;
+    }
+    
+    currentQuote.context = context;
+    currentQuote.hasNewQuote = true;
+    
+    // Display the AI quote
+    currentDisplay = DISPLAY_AI_QUOTE;
+    quoteDisplayStartTime = millis();
+    displayAIQuote();
+    
+    // 2 beeps for new quote
+    beepPattern(2, 150, 100);
+  }
 }
 
 // ================== LED Control Functions ==================
@@ -560,6 +605,46 @@ void displaySuggestion() {
   Serial.println("Suggestion: " + suggestion);
 }
 
+void displayAIQuote() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("*** AI QUOTE ***");
+  
+  String quote = currentQuote.text;
+  int len = quote.length();
+  
+  // Display quote across multiple lines (20 chars per line, up to 3 lines)
+  if (len <= 20) {
+    lcd.setCursor(0, 1);
+    lcd.print(quote);
+  } else if (len <= 40) {
+    lcd.setCursor(0, 1);
+    lcd.print(quote.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(quote.substring(20));
+  } else if (len <= 60) {
+    lcd.setCursor(0, 1);
+    lcd.print(quote.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(quote.substring(20, 40));
+    lcd.setCursor(0, 3);
+    lcd.print(quote.substring(40));
+  } else {
+    // For longer quotes (60-80 chars)
+    lcd.setCursor(0, 1);
+    lcd.print(quote.substring(0, 20));
+    lcd.setCursor(0, 2);
+    lcd.print(quote.substring(20, 40));
+    lcd.setCursor(0, 3);
+    lcd.print(quote.substring(40, 60));
+  }
+  
+  Serial.println("Displaying AI Quote: " + quote);
+  if (currentQuote.context.length() > 0) {
+    Serial.println("Context: " + currentQuote.context);
+  }
+}
+
 void updateLCD() {
   if (currentDisplay != DISPLAY_SENSORS) {
     return;
@@ -727,7 +812,15 @@ void loop() {
     updateLCD();
   }
 
-  // Show suggestion periodically
+  // Handle AI quote display timeout
+  if (currentDisplay == DISPLAY_AI_QUOTE && 
+      millis() - quoteDisplayStartTime >= quoteDisplayDuration) {
+    currentDisplay = DISPLAY_SENSORS;
+    currentQuote.hasNewQuote = false;
+    updateLCD();
+  }
+
+  // Show suggestion periodically (but not if showing AI quote or email)
   if (currentDisplay == DISPLAY_SENSORS && 
       millis() - lastSuggestionTime >= suggestionInterval) {
     currentDisplay = DISPLAY_SUGGESTION;
