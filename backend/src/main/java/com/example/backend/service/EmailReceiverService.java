@@ -455,6 +455,27 @@ public class EmailReceiverService {
     }
 
     /**
+     * Mark all emails as read
+     */
+    public int markAllAsRead() {
+        int count = 0;
+        for (EmailMessage email : receivedEmails) {
+            if (!email.isRead()) {
+                email.setRead(true);
+                emailStorageService.markAsRead(email.getId());
+                count++;
+            }
+        }
+        
+        log.info("Marked {} email(s) as read", count);
+        
+        // Publish updated email statistics to MQTT
+        publishEmailStatisticsToMqtt();
+        
+        return count;
+    }
+
+    /**
      * Publish email statistics to MQTT for ESP32
      */
     private void publishEmailStatisticsToMqtt() {

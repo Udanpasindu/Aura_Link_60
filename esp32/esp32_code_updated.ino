@@ -500,10 +500,10 @@ void readAllSensors() {
   currentReadings.isLight = (lightState == HIGH);
   
   if (lightState == LOW) {
-    digitalWrite(LED_PIN, HIGH);  // Dark - turn ON LED
+    digitalWrite(LED_PIN, LOW);  // Dark - turn ON LED
     lcd.backlight();
   } else {
-    digitalWrite(LED_PIN, LOW);   // Bright - turn OFF LED
+    digitalWrite(LED_PIN, HIGH);   // Bright - turn OFF LED
     lcd.backlight();
   }
 

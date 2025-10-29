@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import EmailCompose from './EmailCompose';
 import EmailList from './EmailList';
+import EmailInbox from './EmailInbox';
 import {
   getSentEmails,
   getReceivedEmails,
@@ -263,12 +264,10 @@ const EmailDashboard: React.FC = () => {
           />
         )}
         {activeTab === 'received' && (
-          <EmailList
+          <EmailInbox
             emails={receivedEmails}
-            title="Received Emails"
             onRefresh={handleRefreshReceivedEmails}
             loading={loading}
-            emailType="received"
           />
         )}
       </div>

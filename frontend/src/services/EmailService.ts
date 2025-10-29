@@ -172,3 +172,11 @@ export const markEmailAsRead = async (id: string): Promise<{ message: string }> 
   const response = await axios.put<{ message: string }>(`${API_URL}/received/${id}/read`);
   return response.data;
 };
+
+/**
+ * Mark all emails as read
+ */
+export const markAllEmailsAsRead = async (): Promise<{ message: string; count: number }> => {
+  const response = await axios.put<{ message: string; count: number }>(`${API_URL}/received/read-all`);
+  return response.data;
+};

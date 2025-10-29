@@ -365,4 +365,22 @@ public class EmailController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
+
+    /**
+     * Mark all emails as read
+     * PUT /api/email/received/read-all
+     */
+    @PutMapping("/received/read-all")
+    public ResponseEntity<Map<String, Object>> markAllEmailsAsRead() {
+        try {
+            int markedCount = emailReceiverService.markAllAsRead();
+            Map<String, Object> response = new HashMap<>();
+            response.put("message", "All emails marked as read");
+            response.put("count", markedCount);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error marking all emails as read: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
 }
