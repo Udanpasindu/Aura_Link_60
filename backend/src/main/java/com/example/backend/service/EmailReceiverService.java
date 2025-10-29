@@ -487,19 +487,67 @@ public class EmailReceiverService {
      * Delete a received email by ID
      */
     public boolean deleteReceivedEmail(String id) {
+        // First, try to delete from IMAP server
+        boolean deletedFromServer = deleteEmailFromServer(id);
+        
+        // Remove from local list
         boolean removed = receivedEmails.removeIf(email -> email.getId().equals(id));
         
-        if (removed) {
+        if (removed || deletedFromServer) {
             // Persist deletion to storage
             emailStorageService.markAsDeleted(id);
             
-            log.info("Deleted email: {}", id);
+            log.info("Deleted email: {} (From server: {}, From cache: {})", 
+                    id, deletedFromServer, removed);
             
             // Publish updated email statistics to MQTT
             publishEmailStatisticsToMqtt();
         }
         
-        return removed;
+        return removed || deletedFromServer;
+    }
+
+    /**
+     * Delete email from IMAP server permanently
+     */
+    private boolean deleteEmailFromServer(String messageId) {
+        try {
+            connect();
+            
+            // Reopen folder in READ_WRITE mode for deletion
+            if (folder != null && folder.isOpen()) {
+                folder.close(false);
+            }
+            folder = store.getFolder(folderName);
+            folder.open(Folder.READ_WRITE);
+            
+            Message[] messages = folder.getMessages();
+            
+            // Find the message by ID
+            for (Message message : messages) {
+                String msgId = getMessageId(message);
+                if (msgId.equals(messageId)) {
+                    // Mark message as DELETED
+                    message.setFlag(Flags.Flag.DELETED, true);
+                    log.info("Marked email as DELETED on server: {}", messageId);
+                    
+                    // Close folder with expunge=true to permanently delete
+                    folder.close(true);
+                    
+                    log.info("Permanently deleted email from server: {}", messageId);
+                    return true;
+                }
+            }
+            
+            log.warn("Email not found on server for deletion: {}", messageId);
+            return false;
+            
+        } catch (MessagingException e) {
+            log.error("Error deleting email from server: {}", e.getMessage());
+            return false;
+        } finally {
+            disconnect();
+        }
     }
 
     /**
